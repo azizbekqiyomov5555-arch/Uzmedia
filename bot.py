@@ -27,8 +27,8 @@ from telegram.ext import (
 )
 
 # ─── KONFIGURATSIYA ────────────────────────────────────────
-BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8915703947:AAFA-KMTbV4waGbA1AlkCgg76u-xSzZMQx0"
-ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "8294492365")
+BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAFo63emy-0HamMW2GLlGCTSwx5rCFUWxDg"
+ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "7812447850")
 
 JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019e229c-c393-7956-ad8c-eaae1a696922"
 GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1XBuO-K6Aqa6ocISRrAKO7pi8Fhl0YJVkcnQSGeYCqsQ"
