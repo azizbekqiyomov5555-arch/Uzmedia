@@ -13,6 +13,7 @@ import logging, asyncio, json, time, re, os, threading, copy
 from datetime import datetime
 from io import BytesIO
 import requests
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -27,11 +28,11 @@ from telegram.ext import (
 )
 
 # ─── KONFIGURATSIYA ────────────────────────────────────────
-BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAFo63emy-0HamMW2GLlGCTSwx5rCFUWxDg"
-ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "7812447850")
+BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8915703947:AAFA-KMTbV4waGbA1AlkCgg76u-xSzZMQx0"
+ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "8294492365")
 
-JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or ""
-GSHEET_ID         = os.environ.get("GSHEET_ID")    or ""
+JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019e229c-c393-7956-ad8c-eaae1a696922"
+GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1XBuO-K6Aqa6ocISRrAKO7pi8Fhl0YJVkcnQSGeYCqsQ"
 GSHEET_API        = os.environ.get("GSHEET_API")   or ""
 NPOINT_URL        = os.environ.get("NPOINT_URL")   or ""
 LOCAL_BACKUP_FILE = "db_backup.json"
@@ -241,7 +242,7 @@ ADMIN_PERM_KEYS = [
     "kino_joy", "qism_qosh", "pullik", "stat", "kanal_post",
     "maj_kanal", "karta", "ilova", "emoji_soz", "kino_kanal_set",
     "qism_tahrir", "kino_uch", "broadcast",
-    "premium_ber", "start_xab",
+    "premium_ber", "start_xab", "qism_och",
 ]
 
 def is_super_admin(uid) -> bool:
@@ -290,7 +291,7 @@ DB_STATUS = {
     "last_err": None,
     "ram_only": False,
     "pending_save": False,   # saqlanish navbatda?
-    "load_failed": False,    # ❗ True bo'lsa — JSONBlob ga YOZISH BLOKLANGAN
+    "load_failed": False,    # JSONBlob yuklanmadi (faqat log uchun, saqlashni bloklamaydi)
 }
 
 EMOJI_IDS: dict = {}  # RAM.emoji_ids bilan sinxron
@@ -351,9 +352,11 @@ DEFAULT_BTN = {
     "kanal_uch":      _B('Kanal ochirish'),
     "kanal_royxat":   _B('Kanallar royxati'),
     "oddiy_havola":   _B("Oddiy havola qo'shish"),
+    "soruvli_kanal":  _B("So'rovli kanal qo'shish"),
     "admin_panel":    _B('Admin panel'),
     "qism_tahrir":    _B('Qismlarni tahrirlash'),
     "admin_qosh":     _B('Admin qoshish'),
+    "qism_och":       _B("Qism ochish"),
     "premium_ber":    _B('Premium berish'),
     "start_xab":      _B('Start xabarni ozgartirish'),
     "kod_btn":        _B('Kod'),
@@ -404,9 +407,11 @@ BTN_LABELS["kanal_qosh"]   = "Kanal qo'shish"
 BTN_LABELS["kanal_uch"]    = "Kanal o'chirish"
 BTN_LABELS["kanal_royxat"] = "Kanallar ro'yxati"
 BTN_LABELS["oddiy_havola"] = "Oddiy havola qo'shish"
+BTN_LABELS["soruvli_kanal"] = "So'rovli kanal qo'shish"
 BTN_LABELS["admin_panel"]  = "Admin panel (orqaga)"
 BTN_LABELS["qism_tahrir"]  = "Qismlarni tahrirlash"
 BTN_LABELS["admin_qosh"]   = "Admin qo'shish"
+BTN_LABELS["qism_och"]    = "Qism ochish"
 BTN_LABELS["premium_ber"]  = "Premium berish"
 BTN_LABELS["start_xab"]    = "Start xabarni o'zgartirish"
 BTN_LABELS["kod_btn"]      = "Kod tugmasi"
@@ -461,14 +466,11 @@ def _load_local() -> dict | None:
 def _save_jsonblob(data: dict, retries: int = 3) -> bool:
     if not JSONBLOB_URL:
         return False
-    # ❗ Yuklash bajarilmagan bo'lsa — saqlashni BLOKLAYMIZ
-    if DB_STATUS.get("load_failed"):
-        logger.warning("🛑 JSONBlob ga yozish bloklangan (load_failed) — bazani saqlab qolish uchun.")
-        return False
-    # ❗ Bo'sh movies bilan yozishni rad etamiz (himoya)
+    # ❗ Bo'sh movies bilan yozishni rad etamiz FAQAT agar RAMda kinolar bor bo'lsa
+    # (ya'ni RAM yuklangan va unda kinolar bor, lekin data bo'sh kelsa — himoya)
     movies = data.get("movies") if isinstance(data, dict) else None
-    if isinstance(movies, dict) and len(movies) == 0:
-        logger.warning("🛑 Bo'sh movies bilan JSONBlob ga yozish RAD ETILDI — himoya.")
+    if isinstance(movies, dict) and len(movies) == 0 and len(RAM.movies) > 0:
+        logger.warning("🛑 Bo'sh movies bilan JSONBlob ga yozish RAD ETILDI — himoya (RAMda kinolar bor).")
         return False
     payload = json.dumps(data, ensure_ascii=False)
     size_kb = len(payload.encode("utf-8")) / 1024
@@ -620,24 +622,26 @@ def db_initial_load():
     has_local = bool(local and (local.get("movies") or local.get("users")))
 
     # ❗ XAVFSIZLIK: agar JSONBlob URL berilgan bo'lsa-yu, undan
-    # yuklab bo'lmagan bo'lsa — saqlashni BLOKLAYMIZ. Aks holda
-    # bo'sh RAM bazaga yozilib, kinolar o'chib ketadi.
+    # yuklab bo'lmagan bo'lsa — lokal fayldan ishlashda davom etamiz.
+    # load_failed ni BOTNI TO'XTATISH uchun emas, faqat log uchun ishlatamiz.
+    # Kinolar qo'shilganda save_now() chaqiriladi va JSONBlob ga yozishga urinadi.
     if JSONBLOB_URL and blob is None:
         logger.error("🛑 JSONBlob dan yuklab bo'lmadi! "
-                     "Saqlash bloklanmoqda — bazani buzilishdan saqlash uchun.")
+                     "Lokal fayldan ishlashda davom etamiz.")
         DB_STATUS["storage_ok"] = False
         DB_STATUS["ram_only"]   = True
-        DB_STATUS["last_err"]   = "JSONBlob yuklanmadi — saqlash bloklangan"
-        DB_STATUS["load_failed"] = True   # ❗ saqlash funksiyalari shuni tekshiradi
+        DB_STATUS["last_err"]   = "JSONBlob yuklanmadi — lokal fayldan yuklanmoqda"
+        # load_failed = False qilamiz — saqlash bloklanmasin!
+        DB_STATUS["load_failed"] = False
         if has_local:
             RAM.from_dict(local)
             EMOJI_IDS.clear()
             EMOJI_IDS.update(RAM.emoji_ids)
             logger.warning(f"⚠️ Faqat lokal yuklandi: {len(RAM.movies)} kino. "
-                           "JSONBlob ga YOZILMAYDI!")
+                           "JSONBlob ga keyinroq uriniladi...")
         else:
             RAM.loaded = True
-            logger.error("⚠️ Hech narsa yuklanmadi va saqlash bloklangan.")
+            logger.warning("⚠️ Hech narsa yuklanmadi. Bo'sh RAM bilan ishga tushdi.")
         return
 
     if not has_blob and not has_local:
@@ -1099,6 +1103,7 @@ def admin_menu_kb(uid=None):
         ("broadcast",      "danger"),
         ("premium_ber",    "success"),
         ("start_xab",      "primary"),
+        ("qism_och",       "success"),
     ]
     if uid is not None and not is_super_admin(uid):
         pairs = [(k, st) for (k, st) in pairs if has_perm(uid, k)]
@@ -1116,27 +1121,44 @@ def admin_menu_kb(uid=None):
 
 def channel_manage_kb():
     return rkb([
-        [rbtn(bt("kanal_qosh"),   style="success", emoji_id=get_eid("kanal_qosh")),
-         rbtn(bt("kanal_uch"),    style="danger",  emoji_id=get_eid("kanal_uch"))],
-        [rbtn(bt("oddiy_havola"), style="primary", emoji_id=get_eid("oddiy_havola"))],
-        [rbtn(bt("kanal_royxat"), style="primary", emoji_id=get_eid("kanal_royxat"))],
-        [rbtn(bt("admin_panel"),  style="success", emoji_id=get_eid("admin_panel"))],
+        [rbtn(bt("kanal_qosh"),    style="success", emoji_id=get_eid("kanal_qosh")),
+         rbtn(bt("kanal_uch"),     style="danger",  emoji_id=get_eid("kanal_uch"))],
+        [rbtn(bt("soruvli_kanal"), style="primary", emoji_id=get_eid("soruvli_kanal"))],
+        [rbtn(bt("oddiy_havola"),  style="primary", emoji_id=get_eid("oddiy_havola"))],
+        [rbtn(bt("kanal_royxat"),  style="primary", emoji_id=get_eid("kanal_royxat"))],
+        [rbtn(bt("admin_panel"),   style="success", emoji_id=get_eid("admin_panel"))],
     ])
 
 
-def channel_delete_inline_kb(channels: list):
+def channel_delete_inline_kb(channels: list, simple_links: list = None):
     rows = []
     for i, ch in enumerate(channels):
+        title = ch.get('title') or ch.get('username') or '?'
+        uname = ch.get('username') or ''
         rows.append([ibtn(
-            f"{ch.get('title','?')} ({ch.get('username','?')})",
+            f"❌ {title} ({uname})",
             data=f"ch_del|{i}", style="danger"
         )])
-    rows.append([ibtn(bt("bekor"), data="ch_del_cancel", style="primary", emoji_id=get_eid("bekor"))])
+    for i, sl in enumerate(simple_links or []):
+        rows.append([ibtn(
+            f"❌ 🔗 {sl.get('title','?')}",
+            data=f"sl_del|{i}", style="danger"
+        )])
+    rows.append([ibtn("🔙 Bekor", data="ch_del_cancel", style="primary")])
     return ikb(rows)
 
 
 def subscription_kb(channels: list, simple_links: list = None):
-    rows = [[ibtn(c["title"], url=c["url"], style="primary")] for c in channels]
+    rows = []
+    for c in channels:
+        if c.get("join_request"):
+            # So'rovli kanal — "So'rov yuborish" tugmasi
+            rows.append([ibtn(
+                f"📨 {c['title']} — So'rov yuborish",
+                url=c["url"], style="primary"
+            )])
+        else:
+            rows.append([ibtn(c["title"], url=c["url"], style="primary")])
     for sl in (simple_links or []):
         rows.append([ibtn(sl["title"], url=sl["url"], style="primary")])
     rows.append([ibtn(bt("tekshir"), data="check_sub", style="success", emoji_id=get_eid("tekshir"))])
@@ -1382,16 +1404,20 @@ async def check_subscription(user_id, bot) -> list:
     async def check_one(ch):
         try:
             chat_ref = _channel_ref(ch)
-            if not chat_ref: return ch
+            if not chat_ref:
+                return None
             member = await bot.get_chat_member(chat_ref, user_id)
             status = getattr(member, "status", "")
             is_member = getattr(member, "is_member", None)
-            if status not in ("creator", "administrator", "member") and is_member is not True:
-                return ch
-            return None
-        except Exception as e:
-            logger.warning(f"Sub check {ch}: {e}")
+            # creator, administrator, member — o'tkazamiz
+            if status in ("creator", "administrator", "member") or is_member is True:
+                return None
+            # So'rovli kanal: "restricted" yoki "left" bo'lsa ham
+            # so'rov yuborilgan bo'lishi mumkin — bu holatda ham talab qilamiz
             return ch
+        except Exception as e:
+            logger.warning(f"Sub check {ch.get('username','?')}: {e}")
+            return None
 
     results = await asyncio.gather(*[check_one(ch) for ch in channels], return_exceptions=True)
     not_subbed = [r for r in results if r is not None and not isinstance(r, Exception)]
@@ -1433,7 +1459,8 @@ def clear_admin_state(context):
         "edit_ep_code", "edit_ep_num", "new_admin_id",
         "channel_manage_menu", "ch_info",
         "premium_target_uid", "start_msg_photo_tmp",
-        "simple_link_title",
+        "simple_link_title", "soruvli_ch_info",
+        "qism_och_target_uid", "qism_och_code",
     ]:
         context.user_data.pop(key, None)
 
@@ -1450,17 +1477,27 @@ def _build_ep_price_list(code: str, eps: list, prices: dict) -> str:
 
 
 def _channels_list_text() -> str:
-    channels = RAM.channels
-    simple   = RAM.simple_links
+    channels = RAM.channels or []
+    simple   = RAM.simple_links or []
     lines = []
-    if channels:
-        lines.append(f"📋 <b>Majburiy kanallar (tekshiriladi)</b> ({len(channels)} ta):\n")
-        for i, ch in enumerate(channels, 1):
-            lines.append(f"  {i}. <b>{ch.get('title','?')}</b> — {ch.get('username','?')}")
+    regular = [ch for ch in channels if not ch.get("join_request")]
+    soruvli  = [ch for ch in channels if ch.get("join_request")]
+    if regular:
+        lines.append(f"📋 <b>Majburiy kanallar (tekshiriladi)</b> — {len(regular)} ta:\n")
+        for i, ch in enumerate(regular, 1):
+            title = ch.get('title') or ch.get('username') or '?'
+            uname = ch.get('username') or '?'
+            lines.append(f"  {i}. <b>{title}</b> — {uname}")
+    if soruvli:
+        lines.append(f"\n📨 <b>So'rovli kanallar (join request)</b> — {len(soruvli)} ta:\n")
+        for i, ch in enumerate(soruvli, 1):
+            title = ch.get('title') or ch.get('username') or '?'
+            uname = ch.get('username') or '?'
+            lines.append(f"  {i}. <b>{title}</b> — {uname}")
     if simple:
-        lines.append(f"\n🔗 <b>Oddiy havolalar (tekshirilmaydi)</b> ({len(simple)} ta):\n")
+        lines.append(f"\n🔗 <b>Oddiy havolalar (tekshirilmaydi)</b> — {len(simple)} ta:\n")
         for i, sl in enumerate(simple, 1):
-            lines.append(f"  {i}. <b>{sl.get('title','?')}</b> — {sl.get('url','?')}")
+            lines.append(f"  {i}. <b>{sl.get('title','?')}</b> — <code>{sl.get('url','?')}</code>")
     if not lines:
         return "📭 Hozircha majburiy kanal yoki havola yo'q."
     return "\n".join(lines)
@@ -1960,10 +1997,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             channels = RAM.channels
             if 0 <= idx < len(channels):
                 removed = channels.pop(idx)
-                await schedule_save()
+                await save_now()
+                title = removed.get('title') or removed.get('username') or '?'
                 try:
                     await q.edit_message_text(
-                        f"✅ <b>{removed.get('title','?')}</b> o'chirildi!\n\n{_channels_list_text()}",
+                        f"✅ <b>{title}</b> o'chirildi!\n\n{_channels_list_text()}",
                         parse_mode="HTML")
                 except: pass
                 await sm(context.bot, uid, "Majburiy kanal boshqaruvi:", channel_manage_kb())
@@ -1971,6 +2009,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await sm(context.bot, uid, "❌ Kanal topilmadi.", channel_manage_kb())
         except Exception as e:
             logger.error(f"ch_del xato: {e}")
+        return
+
+    if data.startswith("sl_del|"):
+        if not is_any_admin(uid): return
+        try:
+            idx    = int(data.split("|")[1])
+            simple = RAM.simple_links
+            if 0 <= idx < len(simple):
+                removed = simple.pop(idx)
+                await save_now()
+                try:
+                    await q.edit_message_text(
+                        f"✅ <b>{removed.get('title','?')}</b> havola o'chirildi!\n\n{_channels_list_text()}",
+                        parse_mode="HTML")
+                except: pass
+                await sm(context.bot, uid, "Majburiy kanal boshqaruvi:", channel_manage_kb())
+            else:
+                await sm(context.bot, uid, "❌ Havola topilmadi.", channel_manage_kb())
+        except Exception as e:
+            logger.error(f"sl_del xato: {e}")
         return
 
     if data == "ch_del_cancel":
@@ -2644,12 +2702,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if text == bt("kanal_uch") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("kanal_uch")):
             channels = RAM.channels
-            if not channels:
-                await sm(context.bot, uid, "❌ Hozircha kanal yo'q.", channel_manage_kb())
+            simple   = RAM.simple_links or []
+            if not channels and not simple:
+                await sm(context.bot, uid, "❌ Hozircha kanal yoki havola yo'q.", channel_manage_kb())
                 return
             await sm(context.bot, uid,
-                f"{_channels_list_text()}\n\nO'chirmoqchi bo'lgan kanalni tanlang 👇",
-                channel_delete_inline_kb(channels))
+                f"{_channels_list_text()}\n\nO'chirmoqchi bo'lgan elementni tanlang 👇",
+                channel_delete_inline_kb(channels, simple))
             return
         if text == bt("kanal_royxat") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("kanal_royxat")):
             await sm(context.bot, uid, _channels_list_text(), channel_manage_kb())
@@ -2660,6 +2719,17 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🔗 <b>Oddiy havola qo'shish</b>\n\n"
                 "Bu havola foydalanuvchilarga ko'rsatiladi, lekin bot obunani <b>tekshirmaydi</b>.\n\n"
                 "Havola nomini kiriting (masalan: <code>Kino kanali</code>):")
+            return
+        if text == bt("soruvli_kanal") or strip_emoji_prefix(text) == strip_emoji_prefix(bt("soruvli_kanal")):
+            context.user_data["admin_state"] = "add_soruvli_kanal"
+            await sm(context.bot, uid,
+                "📨 <b>So'rovli kanal qo'shish</b>\n\n"
+                "Bu turdagi kanalda foydalanuvchi qo'shilish <b>so'rovi yuboradi</b>.\n"
+                "Bot a'zolikni <b>avtomatik tasdiqlaydi</b>.\n\n"
+                "⚠️ <b>Shart:</b> Bot kanalga <b>admin</b> bo'lishi va "
+                "<b>\"A'zolikni boshqarish\"</b> huquqi bo'lishi kerak!\n\n"
+                "Kanal username yoki invite linkini kiriting:\n"
+                "<i>Misol: @mykanal yoki https://t.me/+xxxxx</i>")
             return
         return
 
@@ -2700,7 +2770,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "kanal_post", "maj_kanal", "karta", "ilova",
             "emoji_soz", "asosiy", "boshqarish", "broadcast", "kino_uch",
             "kino_kanal_set", "qism_tahrir", "admin_qosh",
-            "premium_ber", "start_xab",
+            "premium_ber", "start_xab", "qism_och",
         ]
         # Ham to'liq matn, ham emoji-siz matn bilan tekshiramiz
         all_admin_btns = {}
@@ -3044,6 +3114,22 @@ async def admin_buttons(update, context, text: str):
                 f"Tahrirlamoqchi bo'lgan kino <b>kodini</b> kiriting:")
         else:
             await sm(context.bot, uid, "✏️ <b>Qismlarni tahrirlash</b>\n\nKino kodini kiriting:")
+        return
+
+    if _btn_match("kino_uch"):
+        context.user_data["admin_state"] = "delete_movie_code"
+        await sm(context.bot, uid, "🗑 <b>Kino o'chirish</b>\n\nKino kodini kiriting:")
+        return
+
+    if _btn_match("qism_och"):
+        if not has_perm(uid, "qism_och"):
+            await sm(context.bot, uid, "⛔ Sizda bu huquq yo'q.", admin_menu_kb(uid))
+            return
+        context.user_data["admin_state"] = "qism_och_uid"
+        await sm(context.bot, uid,
+            "🔓 <b>Foydalanuvchiga qism ochish</b>\n\n"
+            "Avval foydalanuvchi <b>ID</b> raqamini yuboring:\n"
+            "<i>(Foydalanuvchi botga /start bosgan bo'lishi kerak)</i>")
         return
 
 
@@ -3516,8 +3602,10 @@ async def admin_state_handler(update, context, text: str) -> bool:
         uname     = normalize_channel_username(raw_uname)
         if not uname or (not uname.startswith("@") and not uname.startswith("-100")):
             await sm(context.bot, uid,
-                "❌ Kanal username noto'g'ri.\nMisol: <code>@mykinochannel</code>")
+                "❌ Kanal username noto'g'ri.\n"
+                "Misol: <code>@mykinochannel</code> yoki <code>https://t.me/mykinochannel</code>")
             return True
+        # Duplikat tekshirish
         for ch in RAM.channels:
             ch_uname = normalize_channel_username(ch.get("username", ""))
             if ch_uname.lower() == uname.lower():
@@ -3527,17 +3615,39 @@ async def admin_state_handler(update, context, text: str) -> bool:
                     f"⚠️ <b>{uname}</b> allaqachon qo'shilgan!\n\n{_channels_list_text()}",
                     channel_manage_kb())
                 return True
+        # Kanal ma'lumotlarini olishga urinamiz
+        channel_info = None
         try:
             channel_info = await resolve_required_channel(context.bot, uname)
         except Exception as e:
+            err_str = str(e)
+            # Bot admin emas yoki kanal topilmadi — manual qo'shishga ruxsat beramiz
+            if "admin" in err_str.lower() or "left" in err_str.lower() or "kicked" in err_str.lower():
+                # Bot kanalga admin qo'shilmagan — faqat oddiy havola sifatida qo'shamiz
+                await sm(context.bot, uid,
+                    f"⚠️ Bot <b>{uname}</b> kanalga admin sifatida qo'shilmagan.\n\n"
+                    f"Kanal havolasini tekshira olmayman.\n\n"
+                    f"Shunga qaramay qo'shishni xohlaysizmi?\n"
+                    f"• Ha bo'lsa — kanal <b>nomini</b> kiriting\n"
+                    f"• Yo'q bo'lsa — <b>Asosiy menyu</b> bosing")
+                context.user_data["ch_info"] = {
+                    "chat_id": None,
+                    "username": uname,
+                    "title": uname,
+                    "url": channel_join_url(uname),
+                }
+                context.user_data["admin_state"] = "add_channel_title"
+                return True
             await sm(context.bot, uid,
-                f"❌ Kanal tekshirilmadi. Bot kanalga admin sifatida qo'shilganligini tekshiring.\n\n"
-                f"Xato: <code>{e}</code>")
+                f"❌ Kanal topilmadi. Kanal public ekanligini tekshiring.\n\n"
+                f"Xato: <code>{e}</code>\n\n"
+                f"Qayta username kiriting:")
             return True
         context.user_data["ch_info"]     = channel_info
         context.user_data["admin_state"] = "add_channel_title"
         await sm(context.bot, uid,
-            f"✅ Kanal topildi!\n\n📛 Nom: <b>{channel_info['title']}</b>\n"
+            f"✅ Kanal topildi!\n\n"
+            f"📛 Nom: <b>{channel_info['title']}</b>\n"
             f"👤 Username: <b>{channel_info['username']}</b>\n\n"
             f"Kanal nomini shu holatda qoldirish uchun <b>✅</b> yuboring\n"
             f"yoki yangi nom kiriting:")
@@ -3574,6 +3684,101 @@ async def admin_state_handler(update, context, text: str) -> bool:
         context.user_data.pop("admin_state", None)
         context.user_data["channel_manage_menu"] = True
         await sm(context.bot, uid, "ℹ️ Qaytadan <b>➕ Kanal qo'shish</b> tugmasini bosing.", channel_manage_kb())
+        return True
+
+    if state == "add_soruvli_kanal":
+        raw = text.strip()
+        # Invite link yoki username
+        invite_link = None
+        username    = None
+        if raw.startswith("https://t.me/+") or raw.startswith("https://t.me/joinchat"):
+            invite_link = raw
+        else:
+            username = normalize_channel_username(raw)
+            if not username:
+                await sm(context.bot, uid,
+                    "❌ Noto'g'ri format.\n"
+                    "Misol: <code>@mykanal</code> yoki <code>https://t.me/+xxxxx</code>")
+                return True
+
+        # Duplikat tekshirish
+        check_val = invite_link or username
+        for ch in RAM.channels:
+            if (ch.get("invite_link") == check_val or
+                    normalize_channel_username(ch.get("username","")).lower() == (username or "").lower()):
+                context.user_data.pop("admin_state", None)
+                context.user_data["channel_manage_menu"] = True
+                await sm(context.bot, uid,
+                    f"⚠️ Bu kanal allaqachon qo'shilgan!\n\n{_channels_list_text()}",
+                    channel_manage_kb())
+                return True
+
+        # Kanal ma'lumotlarini olishga urinamiz
+        chat_id   = None
+        title     = None
+        uname_out = username or ""
+        if username:
+            try:
+                chat = await context.bot.get_chat(username)
+                chat_id   = chat.id
+                title     = getattr(chat, "title", None) or username
+                uname_out = f"@{chat.username}" if getattr(chat, "username", None) else username
+            except Exception as e:
+                logger.warning(f"So'rovli kanal get_chat xato: {e}")
+                # Topilmasa ham qo'shishga ruxsat beramiz
+                title = username
+
+        if invite_link:
+            try:
+                chat = await context.bot.get_chat(invite_link)
+                chat_id   = chat.id
+                title     = getattr(chat, "title", None) or "So'rovli kanal"
+                uname_out = f"@{chat.username}" if getattr(chat, "username", None) else ""
+            except Exception as e:
+                logger.warning(f"So'rovli kanal invite get_chat xato: {e}")
+                title = "So'rovli kanal"
+
+        # join_url — foydalanuvchiga ko'rsatiladigan havola
+        join_url = invite_link or (channel_join_url(uname_out) if uname_out else "")
+
+        context.user_data["soruvli_ch_info"] = {
+            "chat_id":      chat_id,
+            "username":     uname_out,
+            "title":        title or uname_out or "So'rovli kanal",
+            "url":          join_url,
+            "invite_link":  invite_link or "",
+            "join_request": True,
+        }
+        context.user_data["admin_state"] = "add_soruvli_kanal_title"
+        await sm(context.bot, uid,
+            f"✅ Topildi!\n\n"
+            f"📛 Nom: <b>{title or uname_out}</b>\n"
+            f"🔗 Havola: <code>{join_url}</code>\n\n"
+            f"Kanal nomini o'zgartirmoqchi bo'lsangiz yozing,\n"
+            f"o'zgartirishni istasangiz <b>✅</b> yuboring:")
+        return True
+
+    if state == "add_soruvli_kanal_title":
+        ch_info = context.user_data.pop("soruvli_ch_info", None)
+        if not ch_info:
+            context.user_data.pop("admin_state", None)
+            await sm(context.bot, uid, "❌ Xatolik. Qaytadan bosing.", channel_manage_kb())
+            return True
+        new_title = text.strip()
+        if new_title not in ("✅", "+", ".", "-", ""):
+            ch_info["title"] = new_title
+        RAM.channels.append(ch_info)
+        await save_now()
+        context.user_data.pop("admin_state", None)
+        context.user_data["channel_manage_menu"] = True
+        await sm(context.bot, uid,
+            f"✅ <b>So'rovli kanal</b> qo'shildi!\n\n"
+            f"📛 Nom: <b>{ch_info['title']}</b>\n"
+            f"🔗 Havola: <code>{ch_info['url']}</code>\n\n"
+            f"⚠️ Bot shu kanalga <b>admin</b> bo'lishi va "
+            f"<b>\"A'zolikni boshqarish\"</b> huquqi bo'lishi kerak!\n\n"
+            f"{_channels_list_text()}",
+            channel_manage_kb())
         return True
 
     if state == "post_channel_code":
@@ -3761,6 +3966,175 @@ async def admin_state_handler(update, context, text: str) -> bool:
             f"<i>Bot bu havolaga obunani tekshirmaydi — faqat ko'rsatadi.</i>\n\n"
             f"{_channels_list_text()}",
             channel_manage_kb())
+        return True
+
+    # ── 🔓 Qism ochish: foydalanuvchi UID ──
+    if state == "qism_och_uid":
+        raw = text.strip()
+        if not raw.isdigit():
+            await sm(context.bot, uid,
+                "❌ Faqat raqamli <b>ID</b> kiriting:\n"
+                "<i>Misol: <code>123456789</code></i>")
+            return True
+        target_uid = raw
+        u = RAM.get_user(target_uid)
+        if not u:
+            await sm(context.bot, uid,
+                f"❌ <code>{target_uid}</code> ID li foydalanuvchi topilmadi.\n"
+                "<i>Foydalanuvchi avval botga /start bosgan bo'lishi kerak.</i>\n\n"
+                "Qayta ID yuboring:")
+            return True
+        target_name = u.get("name") or target_uid
+        context.user_data["qism_och_target_uid"] = target_uid
+        context.user_data["admin_state"] = "qism_och_code"
+        await sm(context.bot, uid,
+            f"👤 Foydalanuvchi: <b>{target_name}</b>\n"
+            f"ID: <code>{target_uid}</code>\n\n"
+            f"Kino <b>kodini</b> kiriting:")
+        return True
+
+    if state == "qism_och_code":
+        target_uid = context.user_data.get("qism_och_target_uid")
+        if not target_uid:
+            clear_admin_state(context)
+            await sm(context.bot, uid, "❌ Xatolik. Qaytadan boshlang.", admin_menu_kb(uid))
+            return True
+        code = text.strip().upper()
+        if code not in RAM.movies:
+            _, matches = find_movie_code(text)
+            if matches:
+                hint = "\n".join([f"• <code>{c}</code> — {RAM.movies.get(c,{}).get('title',c)}"
+                                   for c in matches[:5]])
+                await sm(context.bot, uid,
+                    f"❌ <code>{code}</code> topilmadi.\n\nShunga o'xshash:\n{hint}\n\nTo'g'ri kodini kiriting:")
+            else:
+                await sm(context.bot, uid, f"❌ <code>{code}</code> kodli kino topilmadi. Qayta kiriting:")
+            return True
+        movie = RAM.movies[code]
+        eps = movie.get("episodes", [])
+        prices = movie.get("prices", {}) or {}
+        if not eps:
+            await sm(context.bot, uid,
+                f"⚠️ <b>{movie.get('title', code)}</b> kinoda hali qism yo'q.")
+            context.user_data.pop("admin_state", None)
+            context.user_data.pop("qism_och_target_uid", None)
+            return True
+        # Barcha qismlarni ko'rsatamiz
+        ep_list_lines = []
+        for i in range(len(eps)):
+            ek = str(i + 1)
+            price = price_to_int(prices.get(ek))
+            already = is_episode_paid(target_uid, code, ek)
+            if price > 0:
+                status = "✅ ochiq" if already else "🔒 yopiq"
+                ep_list_lines.append(f"  {ek}-qism — 💰 {price} so'm — {status}")
+            else:
+                ep_list_lines.append(f"  {ek}-qism — bepul")
+        ep_list_text = "\n".join(ep_list_lines)
+        context.user_data["qism_och_code"] = code
+        context.user_data["admin_state"] = "qism_och_ep"
+        target_name = (RAM.get_user(target_uid) or {}).get("name") or target_uid
+        await sm(context.bot, uid,
+            f"🎬 <b>{movie.get('title', code)}</b>  |  <code>{code}</code>\n"
+            f"👤 Foydalanuvchi: <b>{target_name}</b> (<code>{target_uid}</code>)\n\n"
+            f"📺 Qismlar:\n{ep_list_text}\n\n"
+            f"Ochmoqchi bo'lgan qism <b>raqamini</b> kiriting (1 dan {len(eps)} gacha):\n"
+            f"<i>Barcha pullik qismlarni ochish uchun: <code>hammasi</code></i>")
+        return True
+
+    if state == "qism_och_ep":
+        target_uid = context.user_data.get("qism_och_target_uid")
+        code = context.user_data.get("qism_och_code")
+        if not target_uid or not code or code not in RAM.movies:
+            clear_admin_state(context)
+            context.user_data.pop("qism_och_target_uid", None)
+            context.user_data.pop("qism_och_code", None)
+            await sm(context.bot, uid, "❌ Xatolik. Qaytadan boshlang.", admin_menu_kb(uid))
+            return True
+        movie = RAM.movies[code]
+        eps = movie.get("episodes", [])
+        val = text.strip().lower()
+        target_name = (RAM.get_user(target_uid) or {}).get("name") or target_uid
+
+        if val == "hammasi":
+            u_data = RAM.ensure_user(target_uid)
+            opened_count = 0
+            for i in range(len(eps)):
+                ek = str(i + 1)
+                price = price_to_int(movie.get("prices", {}).get(ek))
+                if price > 0:
+                    paid_key = episode_paid_key(code, ek)
+                    u_data["paid_episodes"][paid_key] = {
+                        "status": "approved",
+                        "price": price,
+                        "payment_id": f"admin_och_{uid}_{int(time.time())}",
+                        "approved_at": datetime.now().isoformat(),
+                    }
+                    opened_count += 1
+            await save_now()
+            clear_admin_state(context)
+            context.user_data.pop("qism_och_target_uid", None)
+            context.user_data.pop("qism_och_code", None)
+            try:
+                await sm(context.bot, int(target_uid),
+                    f"🎉 <b>Admin sizga <code>{code}</code> kinosining barcha qismlarini ochib berdi!</b>\n\n"
+                    f"🎬 <b>{movie.get('title', code)}</b>\n"
+                    f"Jami {opened_count} ta pullik qism ochiq. Kino kodini yuboring va tomosha qiling! 🍿")
+            except Exception as e:
+                logger.warning(f"qism_och notify xato: {e}")
+            await sm(context.bot, uid,
+                f"✅ <b>{target_name}</b> uchun <b>{code}</b> kinosining barcha {opened_count} ta pullik qismi ochildi!",
+                admin_menu_kb(uid))
+            return True
+
+        if not val.isdigit():
+            await sm(context.bot, uid,
+                "❌ Qism raqami yoki <code>hammasi</code> kiriting:")
+            return True
+        ep_num = int(val)
+        if ep_num < 1 or ep_num > len(eps):
+            await sm(context.bot, uid,
+                f"❌ <b>{ep_num}</b>-qism mavjud emas. 1–{len(eps)} kiriting:")
+            return True
+        ek = str(ep_num)
+        price = price_to_int(movie.get("prices", {}).get(ek))
+        u_data = RAM.ensure_user(target_uid)
+        paid_key = episode_paid_key(code, ek)
+
+        if is_episode_paid(target_uid, code, ek):
+            clear_admin_state(context)
+            context.user_data.pop("qism_och_target_uid", None)
+            context.user_data.pop("qism_och_code", None)
+            await sm(context.bot, uid,
+                f"ℹ️ <b>{target_name}</b> uchun <b>{ep_num}-qism</b> allaqachon ochiq.",
+                admin_menu_kb(uid))
+            return True
+
+        u_data["paid_episodes"][paid_key] = {
+            "status": "approved",
+            "price": price,
+            "payment_id": f"admin_och_{uid}_{int(time.time())}",
+            "approved_at": datetime.now().isoformat(),
+        }
+        await save_now()
+        clear_admin_state(context)
+        context.user_data.pop("qism_och_target_uid", None)
+        context.user_data.pop("qism_och_code", None)
+
+        try:
+            movie_title = movie.get("title", code)
+            await sm(context.bot, int(target_uid),
+                f"🎉 <b>Admin sizga {ep_num}-qismni ochib berdi!</b>\n\n"
+                f"🎬 <b>{movie_title}</b> — <b>{ep_num}-qism</b>\n"
+                f"Kino kodini yuboring va tomosha qiling 🍿")
+        except Exception as e:
+            logger.warning(f"qism_och notify xato: {e}")
+
+        price_info = f" (💰 {price} so'm)" if price > 0 else " (bepul qism)"
+        await sm(context.bot, uid,
+            f"✅ <b>{target_name}</b> uchun <b>{code}</b> — <b>{ep_num}-qism</b>{price_info} ochildi!\n\n"
+            f"Foydalanuvchiga xabar yuborildi.",
+            admin_menu_kb(uid))
         return True
 
     return False
@@ -4004,11 +4378,89 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ══════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════
+# JOIN REQUEST HANDLER — So'rovli kanallar uchun
+# ══════════════════════════════════════════════════════════
+
+async def join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Foydalanuvchi so'rovli kanalga qo'shilish so'rovi yuborganda
+    bot avtomatik tasdiqlaydi va foydalanuvchiga xabar beradi.
+    """
+    try:
+        req     = update.chat_join_request
+        if not req:
+            return
+        user    = req.from_user
+        chat    = req.chat
+        chat_id = chat.id
+
+        # Faqat bizning so'rovli kanallarimiz uchun ishlasin
+        soruvli_ids = {
+            ch.get("chat_id")
+            for ch in RAM.channels
+            if ch.get("join_request") and ch.get("chat_id")
+        }
+        if chat_id not in soruvli_ids:
+            return
+
+        # So'rovni avtomatik tasdiqlash
+        try:
+            await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user.id)
+            logger.info(f"✅ Join request tasdiqlandi: {user.id} → {chat.title}")
+        except Exception as e:
+            logger.warning(f"Join request tasdiqda xato {user.id} → {chat_id}: {e}")
+            return
+
+        # Foydalanuvchiga xabar
+        try:
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=(f"✅ <b>{chat.title}</b> kanaliga qo'shildingiz!\n\n"
+                      f"Endi botdan foydalanishingiz mumkin 🎬"),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass  # Foydalanuvchi bota yozmagan bo'lishi mumkin
+
+        # Sub cache ni yangilash — endi obuna bor
+        _sub_cache_invalidate(user.id)
+
+    except Exception as e:
+        logger.error(f"join_request_handler xato: {e}")
+
+
+# ══════════════════════════════════════════════════════════
+# FLY.IO HEALTH CHECK — mashinani tirik saqlash uchun
+# ══════════════════════════════════════════════════════════
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, *args):
+        pass  # Keraksiz loglarni o'chirish
+
+def _start_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    try:
+        server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        logger.info(f"✅ Health check server port {port} da ishga tushdi")
+    except Exception as e:
+        logger.warning(f"Health check server xato: {e}")
+
+
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN environment o'zgaruvchisi kiritilmagan")
     if not ADMIN_ID:
         raise RuntimeError("ADMIN_ID environment o'zgaruvchisi kiritilmagan")
+
+    # ── Fly.io health check serverni ishga tushur ─────────
+    _start_health_server()
 
     # ── Ishga tushganda bazadan RAM ga yukla ──────────────
     db_initial_load()
@@ -4029,6 +4481,9 @@ def main():
     app.add_handler(MessageHandler(filters.Sticker.ALL, sticker_handler))
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.VIDEO | filters.Document.ALL, media_handler))
+    # So'rovli kanal uchun — join request handler
+    from telegram.ext import ChatJoinRequestHandler
+    app.add_handler(ChatJoinRequestHandler(join_request_handler))
 
     # ── Har 5 daqiqada JSONBlob ga sinxron saqlash ────────
     async def _periodic_sync(context_job):
@@ -4095,7 +4550,9 @@ def main():
         logger.info("🔄 Periodik sync yoqildi (har 2 daqiqada)")
 
     logger.info(f"🚀 Bot v19 ishga tushdi! RAM: {len(RAM.movies)} kino, {len(RAM.users)} user")
-    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    app.run_polling(drop_pending_updates=True, allowed_updates=[
+        "message", "callback_query", "chat_join_request"
+    ])
 
 
 if __name__ == "__main__":
