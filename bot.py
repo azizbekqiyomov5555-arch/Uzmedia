@@ -27,68 +27,6 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters,
 )
 
-# ─── KONFIGURATSIYA ────────────────────────────────────────
-BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAFo63emy-0HamMW2GLlGCTSwx5rCFUWxDg"
-ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "7812447850")
-
-JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019e27fd-0807-7821-a51f-07ff0921e12b""
-GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1Co2okc7hgiWyJQvMnEx8ZSoGWuyqjwCi8CPrE_B5Lc4"
-GSHEET_API        = os.environ.get("GSHEET_API")   or ""
-NPOINT_URL        = os.environ.get("NPOINT_URL")   or ""
-LOCAL_BACKUP_FILE = "db_backup.json"
-LOCAL_MOVIES_FILE = "movies_backup.json"
-
-logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# ══════════════════════════════════════════════════════════
-# ❗ RAM CACHE — barcha kinolar shu yerda saqlanadi
-# ══════════════════════════════════════════════════════════
-class RamCache:
-    """
-    Bot ishlayotganda barcha ma'lumotlar shu obyektda turadi.
-    JSONBlob faqat fon rejimida yoziladi — bot sekinlamaydi.
-    """
-    def __init__(self):
-        self._lock = threading.Lock()
-        self.movies: dict   = {}   # {code: movie_dict}
-        self.users: dict    = {}   # {uid_str: user_dict}
-        self.channels: list = []
-        self.card_number: str = ""
-        self.pending_payments: dict = {}
-        self.simple_links: list = []   # Tekshirilmaydigan oddiy havolalar
-        self.settings: dict = {
-            "install_file_id": None,
-            "install_video_id": None,
-            "install_caption": "",
-            "kino_kanal_url": "",
-            "start_msg_text": "",
-            "start_msg_photo": None,
-        }
-        self.stats: dict    = {"total_views": 0}
-        self.btn_texts: dict = {}
-        self.emoji_ids: dict = {}
-        self.sub_admins: dict = {}   # {uid_str: {"perms": {key: bool}}}
-        self.loaded: bool   = False  # bazadan yuklandi?
-
-    # ── Barcha ma'lumotlarni dict ga ──────────────────────
-    def to_dict(self) -> dict:
-        with self._lock:
-            return {
-                "movies":           copy.deepcopy(self.movies),
-                "users":            copy.deepcopy(self.users),
-                "channels":         copy.deepcopy(self.channels),
-                "simple_links":     copy.deepcopy(self.simple_links),
-                "card_number":      self.card_number,
-                "pending_payments": copy.deepcopy(self.pending_payments),
-                "settings":         copy.deepcopy(self.settings),
-                "stats":            copy.deepcopy(self.stats),
-                "btn_texts":        copy.deepcopy(self.btn_texts),
-                "emoji_ids":        copy.deepcopy(self.emoji_ids),
-                "sub_admins":       copy.deepcopy(self.sub_admins),
-            }
-
-    # ── Dict dan yuklash ──────────────────────────────────
     def from_dict(self, data: dict):
         if not isinstance(data, dict):
             return
@@ -115,7 +53,85 @@ class RamCache:
             self.emoji_ids        = data.get("emoji_ids", {}) or {}
             self.sub_admins       = data.get("sub_admins", {}) or {}
             self.loaded           = True
+# ─── KONFIGURATSIYA ────────────────────────────────────────
+BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAFo63emy-0HamMW2GLlGCTSwx5rCFUWxDg"
+ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "7812447850")
 
+JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019e27fd-0807-7821-a51f-07ff0921e12b"
+GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1Co2okc7hgiWyJQvMnEx8ZSoGWuyqjwCi8CPrE_B5Lc4"
+GSHEET_API        = os.environ.get("GSHEET_API")   or ""
+NPOINT_URL        = os.environ.get("NPOINT_URL")   or ""
+LOCAL_BACKUP_FILE = "db_backup.json"
+LOCAL_MOVIES_FILE = "movies_backup.json"
+
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    level=logging.INFO
+)
+
+logger = logging.getLogger(__name__)
+
+# ══════════════════════════════════════════════════════════
+# ❗ RAM CACHE — barcha kinolar shu yerda saqlanadi
+# ══════════════════════════════════════════════════════════
+class RamCache:
+    """
+    Bot ishlayotganda barcha ma'lumotlar shu obyektda turadi.
+    JSONBlob faqat fon rejimida yoziladi — bot sekinlamaydi.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+
+        self.movies: dict = {}   # {code: movie_dict}
+        self.users: dict = {}    # {uid_str: user_dict}
+
+        self.channels: list = []
+        self.card_number: str = ""
+
+        self.pending_payments: dict = {}
+
+        # Tekshirilmaydigan oddiy havolalar
+        self.simple_links: list = []
+
+        self.settings: dict = {
+            "install_file_id": None,
+            "install_video_id": None,
+            "install_caption": "",
+            "kino_kanal_url": "",
+            "start_msg_text": "",
+            "start_msg_photo": None,
+        }
+
+        self.stats: dict = {
+            "total_views": 0
+        }
+
+        self.btn_texts: dict = {}
+        self.emoji_ids: dict = {}
+
+        # {uid_str: {"perms": {key: bool}}}
+        self.sub_admins: dict = {}
+
+        # bazadan yuklandi?
+        self.loaded: bool = False
+
+    # ── Barcha ma'lumotlarni dict ga ──────────────────────
+    def to_dict(self) -> dict:
+        with self._lock:
+            return {
+                "movies": copy.deepcopy(self.movies),
+                "users": copy.deepcopy(self.users),
+                "channels": copy.deepcopy(self.channels),
+                "simple_links": copy.deepcopy(self.simple_links),
+                "card_number": self.card_number,
+                "pending_payments": copy.deepcopy(self.pending_payments),
+                "settings": copy.deepcopy(self.settings),
+                "stats": copy.deepcopy(self.stats),
+                "btn_texts": copy.deepcopy(self.btn_texts),
+                "emoji_ids": copy.deepcopy(self.emoji_ids),
+                "sub_admins": copy.deepcopy(self.sub_admins),
+            }
     # ── Kino operatsiyalari ───────────────────────────────
     def get_movie(self, code: str) -> dict | None:
         return self.movies.get(code.upper())
