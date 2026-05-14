@@ -28,11 +28,11 @@ from telegram.ext import (
 )
 
 # ─── KONFIGURATSIYA ────────────────────────────────────────
-BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8723400610:AAH9haL0WChkCsGBx1AGW3uOGVt4XHOZ3LU"
+BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAG6jyvASKlCkneZEX6M5puib4pKNHKSfAk"
 ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "8537782289")
 
-JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019df4aa-10b1-725c-83f5-9901ab2db9b6"
-GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1Lodn9MTb7nysq5l80cQVCu9IKfgQRlnNe654PT0hKQs"
+JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019e27fd-0807-7821-a51f-07ff0921e12b"
+GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1Co2okc7hgiWyJQvMnEx8ZSoGWuyqjwCi8CPrE_B5Lc4"
 GSHEET_API        = os.environ.get("GSHEET_API")   or ""
 NPOINT_URL        = os.environ.get("NPOINT_URL")   or ""
 LOCAL_BACKUP_FILE = "db_backup.json"
