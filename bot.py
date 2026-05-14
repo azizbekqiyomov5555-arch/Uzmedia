@@ -30,8 +30,8 @@ from telegram.ext import (
 BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAFo63emy-0HamMW2GLlGCTSwx5rCFUWxDg"
 ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "7812447850")
 
-JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019e229c-c393-7956-ad8c-eaae1a696922"
-GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1XBuO-K6Aqa6ocISRrAKO7pi8Fhl0YJVkcnQSGeYCqsQ"
+JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or ""
+GSHEET_ID         = os.environ.get("GSHEET_ID")    or ""
 GSHEET_API        = os.environ.get("GSHEET_API")   or ""
 NPOINT_URL        = os.environ.get("NPOINT_URL")   or ""
 LOCAL_BACKUP_FILE = "db_backup.json"
