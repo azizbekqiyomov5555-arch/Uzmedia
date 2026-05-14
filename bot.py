@@ -31,7 +31,7 @@ from telegram.ext import (
 BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAG6jyvASKlCkneZEX6M5puib4pKNHKSfAk"
 ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "7812447850")
 
-JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019e27fd-0807-7821-a51f-07ff0921e12b"
+JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019e28c9-0d70-7fbf-9b65-231d4a399811"
 GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1Co2okc7hgiWyJQvMnEx8ZSoGWuyqjwCi8CPrE_B5Lc4"
 GSHEET_API        = os.environ.get("GSHEET_API")   or ""
 NPOINT_URL        = os.environ.get("NPOINT_URL")   or ""
