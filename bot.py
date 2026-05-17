@@ -31,7 +31,7 @@ from telegram.ext import (
 BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAGHUh69s8gTfyq4euK8_ZprSxjJFG4ELUg"
 ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "8537782289")
 
-JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019df4aa-10b1-725c-83f5-9901ab2db9b6"
+JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019e28c9-0d70-7fbf-9b65-231d4a399811"
 GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1Lodn9MTb7nysq5l80cQVCu9IKfgQRlnNe654PT0hKQs"
 
 # ─── CHECKCARD API KONFIGURATSIYASI ─────────────────────────
