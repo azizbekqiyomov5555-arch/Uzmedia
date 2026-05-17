@@ -32,7 +32,7 @@ BOT_TOKEN  = os.environ.get("BOT_TOKEN")  or "8774359442:AAGHUh69s8gTfyq4euK8_Zp
 ADMIN_ID   = int(os.environ.get("ADMIN_ID") or "8537782289")
 
 JSONBLOB_URL      = os.environ.get("JSONBLOB_URL") or "https://jsonblob.com/api/jsonBlob/019e28c9-0d70-7fbf-9b65-231d4a399811"
-GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1Lodn9MTb7nysq5l80cQVCu9IKfgQRlnNe654PT0hKQs"
+GSHEET_ID         = os.environ.get("GSHEET_ID")    or "1Co2okc7hgiWyJQvMnEx8ZSoGWuyqjwCi8CPrE_B5Lc4"
 
 # ─── CHECKCARD API KONFIGURATSIYASI ─────────────────────────
 CHECKCARD_SHOP_ID  = os.environ.get("CHECKCARD_SHOP_ID")  or "924672"
